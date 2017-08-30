@@ -54,27 +54,20 @@ impl Client {
     }
 
     pub fn serve(self, conn: TcpStream) -> Box<Future<Item = (u64, u64), Error = io::Error>> {
+        // socks version, only support version 5.
         let version = read_exact(conn, [0u8; 2]).and_then(|(conn, buf)| if buf[0] == v5::VERSION {
             Ok((conn, buf))
         } else {
             Err(other("unknown version"))
         });
 
+        // ignore socks method
         let method = version.and_then(|(conn, buf)| read_exact(conn, [0u8, buf[1] as u8]));
 
-        // After we've concluded that one of the client's supported methods is
-        // `METH_NO_AUTH`, we "ack" this to the client by sending back that
-        // information. Here we make use of the `write_all` combinator which
-        // works very similarly to the `read_exact` combinator.
+        // send confirmation: version 5, no authentication required
         let part1 = method.and_then(|(conn, _)| write_all(conn, [v5::VERSION, v5::METH_NO_AUTH]));
 
-        // Next up, we get a selected protocol version back from the client, as
-        // well as a command indicating what they'd like to do. We just verify
-        // that the version is still v5, and then we only implement the
-        // "connect" command so we ensure the proxy sends that.
-        //
-        // As above, we're using `and_then` not only for chaining "blocking
-        // computations", but also to perform fallible computations.
+        // check version and cmd
         let ack = part1.and_then(|(conn, _)| {
             read_exact(conn, [0u8]).and_then(|(conn, buf)| if buf[0] == v5::VERSION {
                 Ok(conn)
