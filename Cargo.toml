@@ -2,6 +2,11 @@
 name = "tokio-socks5"
 version = "0.1.0"
 authors = ["cssivision <cssivision@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/cssivision/tokio-socks5-rs"
+homepage = "https://github.com/cssivision/tokio-socks5-rs"
+description = "async socks5 protocol"
+readme = "README.md"
 
 [dependencies]
 log = "0.3"
