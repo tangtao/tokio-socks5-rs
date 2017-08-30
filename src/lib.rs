@@ -21,6 +21,22 @@ use trust_dns::client::{BasicClientHandle, ClientHandle};
 use trust_dns::op::{Message, ResponseCode};
 use trust_dns::rr::{DNSClass, Name, RData, RecordType};
 
+#[allow(dead_code)]
+mod v5 {
+    pub const VERSION: u8 = 5;
+
+    pub const METH_NO_AUTH: u8 = 0;
+    pub const METH_GSSAPI: u8 = 1;
+    pub const METH_USER_PASS: u8 = 2;
+
+    pub const CMD_CONNECT: u8 = 1;
+    pub const CMD_BIND: u8 = 2;
+    pub const CMD_UDP_ASSOCIATE: u8 = 3;
+
+    pub const ATYP_IPV4: u8 = 1;
+    pub const ATYP_IPV6: u8 = 4;
+    pub const ATYP_DOMAIN: u8 = 3;
+}
 
 // Data used to when processing a client to perform various operations over its
 // lifetime.
@@ -30,49 +46,27 @@ pub struct Client {
 }
 
 impl Client {
+    pub fn new(client: BasicClientHandle, handle: Handle) -> Client {
+        return Client {
+            dns: client.clone(),
+            handle: handle.clone(),
+        };
+    }
+
     pub fn serve(self, conn: TcpStream) -> Box<Future<Item = (u64, u64), Error = io::Error>> {
-        Box::new(read_exact(conn, [0u8]).and_then(
-            |(conn, buf)| match buf[0] {
-                v5::VERSION => self.serve_v5(conn),
-                v4::VERSION => self.serve_v4(conn),
-                _ => Box::new(future::err(other("unknown version"))),
-            },
-        ))
-    }
+        let version = read_exact(conn, [0u8; 2]).and_then(|(conn, buf)| if buf[0] == v5::VERSION {
+            Ok((conn, buf))
+        } else {
+            Err(other("unknown version"))
+        });
 
-    /// Current SOCKSv4 is not implemented, but v5 below has more fun details!
-    fn serve_v4(self, _conn: TcpStream) -> Box<Future<Item = (u64, u64), Error = io::Error>> {
-        Box::new(future::err(other("unimplemented")))
-    }
-
-    fn serve_v5(self, conn: TcpStream) -> Box<Future<Item = (u64, u64), Error = io::Error>> {
-        // First part of the SOCKSv5 protocol is to negotiate a number of
-        // "methods". These methods can typically be used for various kinds of
-        // proxy authentication and such, but for this server we only implement
-        // the `METH_NO_AUTH` method, indicating that we only implement
-        // connections that work with no authentication.
-        //
-        // First here we do the same thing as reading the version byte, we read
-        // a byte indicating how many methods. Afterwards we then read all the
-        // methods into a temporary buffer.
-        //
-        // Note that we use `and_then` here to chain computations after one
-        // another, but it also serves to simply have fallible computations,
-        // such as checking whether the list of methods contains `METH_NO_AUTH`.
-        let num_methods = read_exact(conn, [0u8]);
-        let authenticated = num_methods
-            .and_then(|(conn, buf)| read_exact(conn, vec![0u8; buf[0] as usize]))
-            .and_then(|(conn, buf)| if buf.contains(&v5::METH_NO_AUTH) {
-                Ok(conn)
-            } else {
-                Err(other("no supported method given"))
-            });
+        let method = version.and_then(|(conn, buf)| read_exact(conn, [0u8, buf[1] as u8]));
 
         // After we've concluded that one of the client's supported methods is
         // `METH_NO_AUTH`, we "ack" this to the client by sending back that
         // information. Here we make use of the `write_all` combinator which
         // works very similarly to the `read_exact` combinator.
-        let part1 = authenticated.and_then(|conn| write_all(conn, [v5::VERSION, v5::METH_NO_AUTH]));
+        let part1 = method.and_then(|(conn, _)| write_all(conn, [v5::VERSION, v5::METH_NO_AUTH]));
 
         // Next up, we get a selected protocol version back from the client, as
         // well as a command indicating what they'd like to do. We just verify
@@ -395,31 +389,4 @@ fn get_addr(response: Message, port: u16) -> io::Result<SocketAddr> {
         Some(addr) => Ok(SocketAddr::new(addr, port)),
         None => Err(other("no address records in response")),
     }
-}
-
-// Various constants associated with the SOCKS protocol
-
-#[allow(dead_code)]
-mod v5 {
-    pub const VERSION: u8 = 5;
-
-    pub const METH_NO_AUTH: u8 = 0;
-    pub const METH_GSSAPI: u8 = 1;
-    pub const METH_USER_PASS: u8 = 2;
-
-    pub const CMD_CONNECT: u8 = 1;
-    pub const CMD_BIND: u8 = 2;
-    pub const CMD_UDP_ASSOCIATE: u8 = 3;
-
-    pub const ATYP_IPV4: u8 = 1;
-    pub const ATYP_IPV6: u8 = 4;
-    pub const ATYP_DOMAIN: u8 = 3;
-}
-
-#[allow(dead_code)]
-mod v4 {
-    pub const VERSION: u8 = 4;
-
-    pub const CMD_CONNECT: u8 = 1;
-    pub const CMD_BIND: u8 = 2;
 }
