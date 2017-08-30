@@ -33,9 +33,9 @@ mod v5 {
     pub const CMD_BIND: u8 = 2;
     pub const CMD_UDP_ASSOCIATE: u8 = 3;
 
-    pub const ATYP_IPV4: u8 = 1;
-    pub const ATYP_IPV6: u8 = 4;
-    pub const ATYP_DOMAIN: u8 = 3;
+    pub const TYPE_IPV4: u8 = 1;
+    pub const TYPE_IPV6: u8 = 4;
+    pub const TYPE_DOMAIN: u8 = 3;
 }
 
 // Data used to when processing a client to perform various operations over its
@@ -92,7 +92,7 @@ impl Client {
             match buf[0] {
                 // For IPv4 addresses, we read the 4 bytes for the address as
                 // well as 2 bytes for the port.
-                v5::ATYP_IPV4 => mybox(read_exact(c, [0u8; 6]).map(|(c, buf)| {
+                v5::TYPE_IPV4 => mybox(read_exact(c, [0u8; 6]).map(|(c, buf)| {
                     let addr = Ipv4Addr::new(buf[0], buf[1], buf[2], buf[3]);
                     let port = ((buf[4] as u16) << 8) | (buf[5] as u16);
                     let addr = SocketAddrV4::new(addr, port);
@@ -101,7 +101,7 @@ impl Client {
 
                 // For IPv6 addresses there's 16 bytes of an address plus two
                 // bytes for a port, so we read that off and then keep going.
-                v5::ATYP_IPV6 => mybox(read_exact(c, [0u8; 18]).map(|(conn, buf)| {
+                v5::TYPE_IPV6 => mybox(read_exact(c, [0u8; 18]).map(|(conn, buf)| {
                     let a = ((buf[0] as u16) << 8) | (buf[1] as u16);
                     let b = ((buf[2] as u16) << 8) | (buf[3] as u16);
                     let c = ((buf[4] as u16) << 8) | (buf[5] as u16);
@@ -120,7 +120,7 @@ impl Client {
                 // IP addresses, but also arbitrary hostnames. This allows
                 // clients to perform hostname lookups within the context of the
                 // proxy server rather than the client itself.
-                v5::ATYP_DOMAIN => mybox(
+                v5::TYPE_DOMAIN => mybox(
                     read_exact(c, [0u8])
                         .and_then(|(conn, buf)| {
                             read_exact(conn, vec![0u8; buf[0] as usize + 2])
@@ -140,7 +140,7 @@ impl Client {
                 ),
 
                 n => {
-                    let msg = format!("unknown ATYP received: {}", n);
+                    let msg = format!("unknown address type, received: {}", n);
                     mybox(future::err(other(&msg)))
                 }
             }
