@@ -67,7 +67,7 @@ impl Client {
         // send confirmation: version 5, no authentication required
         let part1 = method.and_then(|(conn, _)| write_all(conn, [v5::VERSION, v5::METH_NO_AUTH]));
 
-        // check version and cmd
+        // check version
         let ack = part1.and_then(|(conn, _)| {
             read_exact(conn, [0u8]).and_then(|(conn, buf)| if buf[0] == v5::VERSION {
                 Ok(conn)
@@ -75,6 +75,7 @@ impl Client {
                 Err(other("didn't confirm with v5 version"))
             })
         });
+        // checkout cmd
         let command = ack.and_then(|conn| {
             read_exact(conn, [0u8]).and_then(|(conn, buf)| if buf[0] == v5::CMD_CONNECT {
                 Ok(conn)
@@ -83,17 +84,10 @@ impl Client {
             })
         });
 
-        // After we've negotiated a command, there's one byte which is reserved
-        // for future use, so we read it and discard it. The next part of the
-        // protocol is to read off the address that we're going to proxy to.
-        // This address can come in a number of forms, so we read off a byte
-        // which indicates the address type (ATYP).
-        //
-        // Depending on the address type, we then delegate to different futures
-        // to implement that particular address format.
         let mut dns = self.dns.clone();
-        let resv = command.and_then(|c| read_exact(c, [0u8]).map(|c| c.0));
-        let atyp = resv.and_then(|c| read_exact(c, [0u8]));
+        // there's one byte which is reserved for future use, so we read it and discard it.
+        let resv = command.and_then(|c| read_exact(c, [0u8]));
+        let atyp = resv.and_then(|(conn, _)| read_exact(conn, [0u8]));
         let addr = mybox(atyp.and_then(move |(c, buf)| {
             match buf[0] {
                 // For IPv4 addresses, we read the 4 bytes for the address as
@@ -126,27 +120,6 @@ impl Client {
                 // IP addresses, but also arbitrary hostnames. This allows
                 // clients to perform hostname lookups within the context of the
                 // proxy server rather than the client itself.
-                //
-                // Since the first publication of this code, several
-                // futures-based DNS libraries appeared, and as a demonstration
-                // of integrating third-party asynchronous code into our chain,
-                // we will use one of them, TRust-DNS.
-                //
-                // The protocol here is to have the next byte indicate how many
-                // bytes the hostname contains, followed by the hostname and two
-                // bytes for the port. To read this data, we execute two
-                // respective `read_exact` operations to fill up a buffer for
-                // the hostname.
-                //
-                // Finally, to perform the "interesting" part, we process the
-                // buffer and pass the retrieved hostname to a query future if
-                // it wasn't already recognized as an IP address. The query is
-                // very basic: it asks for an IPv4 address with a timeout of
-                // five seconds. We're using TRust-DNS at the protocol level,
-                // so we don't have the functionality normally expected from a
-                // stub resolver, such as sorting of answers according to RFC
-                // 6724, more robust timeout handling, or resolving CNAME
-                // lookups.
                 v5::ATYP_DOMAIN => mybox(
                     read_exact(c, [0u8])
                         .and_then(|(conn, buf)| {
