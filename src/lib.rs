@@ -3,7 +3,6 @@ extern crate futures;
 extern crate log;
 extern crate tokio_core;
 extern crate tokio_io;
-extern crate trust_dns;
 
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
@@ -126,14 +125,12 @@ impl Client {
                         })
                         .and_then(|(conn, buf)| {
                             let hostname = &buf[..buf.len() - 2];
-                            let hostname = match str::from_utf8(hostname) {
-                                Ok(h) => h,
-                                Err(_) => {
-                                    return mybox(
-                                        future::err(other("hostname include invalid utf8")),
-                                    );
-                                }
+                            let hostname = if let Ok(hostname) = str::from_utf8(hostname) {
+                                hostname
+                            } else {
+                                return mybox(future::err(other("hostname include invalid utf8")));
                             };
+
                             let pos = buf.len() - 2;
                             let port = ((buf[pos] as u16) << 8) | (buf[pos + 1] as u16);
                             mybox(future::ok(
