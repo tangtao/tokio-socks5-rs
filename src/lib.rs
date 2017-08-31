@@ -6,20 +6,21 @@ extern crate tokio_io;
 extern crate trust_dns;
 
 use std::io;
-use std::net::IpAddr;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::str;
 use std::time::Duration;
 
 use futures::future;
 use futures::Future;
-use tokio_io::io::{copy, read_exact, write_all, Window};
-use tokio_io::AsyncRead;
+use tokio_io::io::{read_exact, write_all};
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::{Handle, Timeout};
-use trust_dns::client::{BasicClientHandle, ClientHandle};
-use trust_dns::op::{Message, ResponseCode};
-use trust_dns::rr::{DNSClass, Name, RData, RecordType};
+
+pub enum Address {
+    IPV4(SocketAddrV4),
+    IPV6(SocketAddrV6),
+    Domain(String, u16),
+}
 
 #[allow(dead_code)]
 mod v5 {
@@ -41,19 +42,20 @@ mod v5 {
 // Data used to when processing a client to perform various operations over its
 // lifetime.
 pub struct Client {
-    pub dns: BasicClientHandle,
     pub handle: Handle,
 }
 
 impl Client {
-    pub fn new(client: BasicClientHandle, handle: Handle) -> Client {
+    pub fn new(handle: Handle) -> Client {
         return Client {
-            dns: client.clone(),
             handle: handle.clone(),
         };
     }
 
-    pub fn serve(self, conn: TcpStream) -> Box<Future<Item = (u64, u64), Error = io::Error>> {
+    pub fn serve(
+        self,
+        conn: TcpStream,
+    ) -> Box<Future<Item = (TcpStream, String, u16), Error = io::Error>> {
         // socks version, only support version 5.
         let version = read_exact(conn, [0u8; 2]).and_then(|(conn, buf)| if buf[0] == v5::VERSION {
             Ok((conn, buf))
@@ -84,11 +86,10 @@ impl Client {
             })
         });
 
-        let mut dns = self.dns.clone();
         // there's one byte which is reserved for future use, so we read it and discard it.
         let resv = command.and_then(|c| read_exact(c, [0u8]));
-        let atyp = resv.and_then(|(conn, _)| read_exact(conn, [0u8]));
-        let addr = mybox(atyp.and_then(move |(c, buf)| {
+        let adress_type = resv.and_then(|(conn, _)| read_exact(conn, [0u8]));
+        let addr = mybox(adress_type.and_then(move |(c, buf)| {
             match buf[0] {
                 // For IPv4 addresses, we read the 4 bytes for the address as
                 // well as 2 bytes for the port.
@@ -96,7 +97,7 @@ impl Client {
                     let addr = Ipv4Addr::new(buf[0], buf[1], buf[2], buf[3]);
                     let port = ((buf[4] as u16) << 8) | (buf[5] as u16);
                     let addr = SocketAddrV4::new(addr, port);
-                    (c, SocketAddr::V4(addr))
+                    (c, Address::IPV4(addr))
                 })),
 
                 // For IPv6 addresses there's 16 bytes of an address plus two
@@ -113,29 +114,31 @@ impl Client {
                     let addr = Ipv6Addr::new(a, b, c, d, e, f, g, h);
                     let port = ((buf[16] as u16) << 8) | (buf[17] as u16);
                     let addr = SocketAddrV6::new(addr, port, 0, 0);
-                    (conn, SocketAddr::V6(addr))
+                    (conn, Address::IPV6(addr))
                 })),
 
                 // The SOCKSv5 protocol not only supports proxying to specific
-                // IP addresses, but also arbitrary hostnames. This allows
-                // clients to perform hostname lookups within the context of the
-                // proxy server rather than the client itself.
+                // IP addresses, but also arbitrary hostnames.
                 v5::TYPE_DOMAIN => mybox(
                     read_exact(c, [0u8])
                         .and_then(|(conn, buf)| {
                             read_exact(conn, vec![0u8; buf[0] as usize + 2])
                         })
-                        .and_then(move |(conn, buf)| {
-                            let (name, port) = match name_port(&buf) {
-                                Ok(UrlHost::Name(name, port)) => (name, port),
-                                Ok(UrlHost::Addr(addr)) => return mybox(future::ok((conn, addr))),
-                                Err(e) => return mybox(future::err(e)),
+                        .and_then(|(conn, buf)| {
+                            let hostname = &buf[..buf.len() - 2];
+                            let hostname = match str::from_utf8(hostname) {
+                                Ok(h) => h,
+                                Err(_) => {
+                                    return mybox(
+                                        future::err(other("hostname include invalid utf8")),
+                                    );
+                                }
                             };
-
-                            let ipv4 = dns.query(name, DNSClass::IN, RecordType::A)
-                                .map_err(|e| other(&format!("dns error: {}", e)))
-                                .and_then(move |r| get_addr(r, port));
-                            mybox(ipv4.map(|addr| (conn, addr)))
+                            let pos = buf.len() - 2;
+                            let port = ((buf[pos] as u16) << 8) | (buf[pos + 1] as u16);
+                            mybox(future::ok(
+                                (conn, Address::Domain(hostname.to_string(), port)),
+                            ))
                         }),
                 ),
 
@@ -274,26 +277,9 @@ impl Client {
             },
         ));
 
-        // At this point we've *actually* finished the handshake. Not only have
-        // we read/written all the relevant bytes, but we've also managed to
-        // complete in under our allotted timeout.
-        //
-        // At this point the remainder of the SOCKSv5 proxy is shuttle data back
-        // and for between the two connections. That is, data is read from `c1`
-        // and written to `c2`, and vice versa.
-        //
-        // To accomplish this, we put both sockets into their own `Rc` and then
-        // create two independent `Transfer` futures representing each half of
-        // the connection. These two futures are `join`ed together to represent
-        // the proxy operation happening.
-        mybox(pair.and_then(|(c1, c2)| {
-            let (reader1, writer1) = c1.split();
-            let (reader2, writer2) = c2.split();
-
-            let half1 = copy(reader1, writer2);
-            let half2 = copy(reader2, writer1);
-            half1.join(half2).map(|(item1, item2)| (item1.0, item2.0))
-        }))
+        mybox(
+            pair.and_then(|(c1, c2)| future::ok((c1, String::new(), 128))),
+        )
     }
 }
 
@@ -304,55 +290,4 @@ fn mybox<F: Future + 'static>(f: F) -> Box<Future<Item = F::Item, Error = F::Err
 
 fn other(desc: &str) -> io::Error {
     io::Error::new(io::ErrorKind::Other, desc)
-}
-
-enum UrlHost {
-    Name(Name, u16),
-    Addr(SocketAddr),
-}
-
-// Extracts the name and port from addr_buf and returns them, converting
-// the name to the form that the trust-dns client can use. If the original
-// name can be parsed as an IP address, makes a SocketAddr from that
-// address and the port and returns it; we skip DNS resolution in that
-// case.
-fn name_port(addr_buf: &[u8]) -> io::Result<UrlHost> {
-    // The last two bytes of the buffer are the port, and the other parts of it
-    // are the hostname.
-    let hostname = &addr_buf[..addr_buf.len() - 2];
-    let hostname = try!(str::from_utf8(hostname).map_err(|_e| {
-        other("hostname buffer provided was not valid utf-8")
-    }));
-    let pos = addr_buf.len() - 2;
-    let port = ((addr_buf[pos] as u16) << 8) | (addr_buf[pos + 1] as u16);
-
-    if let Ok(ip) = hostname.parse() {
-        return Ok(UrlHost::Addr(SocketAddr::new(ip, port)));
-    }
-    let name = try!(
-        Name::parse(hostname, Some(&Name::root()))
-            .map_err(|e| { io::Error::new(io::ErrorKind::Other, e.to_string()) })
-    );
-    Ok(UrlHost::Name(name, port))
-}
-
-// Extracts the first IP address from the response.
-fn get_addr(response: Message, port: u16) -> io::Result<SocketAddr> {
-    if response.get_response_code() != ResponseCode::NoError {
-        return Err(other("resolution failed"));
-    }
-    let addr = response
-        .get_answers()
-        .iter()
-        .filter_map(|ans| match *ans.get_rdata() {
-            RData::A(addr) => Some(IpAddr::V4(addr)),
-            RData::AAAA(addr) => Some(IpAddr::V6(addr)),
-            _ => None,
-        })
-        .next();
-
-    match addr {
-        Some(addr) => Ok(SocketAddr::new(addr, port)),
-        None => Err(other("no address records in response")),
-    }
 }
