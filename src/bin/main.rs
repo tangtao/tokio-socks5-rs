@@ -1,7 +1,6 @@
 extern crate env_logger;
 extern crate futures;
 extern crate tokio_core;
-extern crate trust_dns;
 extern crate tokio_socks5;
 
 use std::env;
@@ -12,9 +11,6 @@ use futures::future;
 use futures::{Future, Stream};
 use tokio_core::net::TcpListener;
 use tokio_core::reactor::Core;
-use trust_dns::client::ClientFuture;
-use trust_dns::udp::UdpClientStream;
-use tokio_socks5::Client;
 
 fn main() {
     drop(env_logger::init());
@@ -30,13 +26,6 @@ fn main() {
     let handle = lp.handle();
     let listener = TcpListener::bind(&addr, &handle).unwrap();
 
-    // This is the address of the DNS server we'll send queries to. If
-    // external servers can't be used in your environment, you can substitue
-    // your own.
-    let dns = "8.8.8.8:53".parse().unwrap();
-    let (stream, sender) = UdpClientStream::new(dns, handle.clone());
-    let client = ClientFuture::new(stream, sender, handle.clone(), None);
-
     // Construct a future representing our server. This future processes all
     // incoming connections and spawns a new task for each client which will do
     // the proxy work.
@@ -48,18 +37,19 @@ fn main() {
     // progress concurrently with all other connections.
     println!("Listening for socks5 proxy connections on {}", addr);
     let clients = listener.incoming().map(move |(socket, addr)| {
-        (Client {
-            dns: client.clone(),
-            handle: handle.clone(),
-        }.serve(socket), addr)
+        (
+            Client {
+                dns: client.clone(),
+                handle: handle.clone(),
+            }.serve(socket),
+            addr,
+        )
     });
     let handle = lp.handle();
     let server = clients.for_each(|(client, addr)| {
         handle.spawn(client.then(move |res| {
             match res {
-                Ok((a, b)) => {
-                    println!("proxied {}/{} bytes for {}", a, b, addr)
-                }
+                Ok((a, b)) => println!("proxied {}/{} bytes for {}", a, b, addr),
                 Err(e) => println!("error for {}: {}", addr, e),
             }
             future::ok(())
@@ -67,11 +57,5 @@ fn main() {
         Ok(())
     });
 
-    // Now that we've got our server as a future ready to go, let's run it!
-    //
-    // This `run` method will return the resolution of the future itself, but
-    // our `server` futures will resolve to `io::Result<()>`, so we just want to
-    // assert that it didn't hit an error.
     lp.run(server).unwrap();
 }
-
