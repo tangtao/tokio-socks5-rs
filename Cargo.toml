@@ -9,8 +9,10 @@ description = "async socks5 protocol"
 readme = "README.md"
 
 [dependencies]
-log = "0.3"
 futures = "0.1"
 tokio-core = "0.1"
 tokio-io = "0.1"
+
+[dev-dependencies]
+log = "0.3"
 env_logger = "0.3"
