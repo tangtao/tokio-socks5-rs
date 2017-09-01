@@ -1,5 +1,7 @@
 extern crate env_logger;
 extern crate futures;
+#[use_macro]
+extern crate log;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_socks5;
@@ -21,15 +23,17 @@ fn main() {
 
     println!("Listening for socks5 proxy connections on {}", addr);
     let streams = listener.incoming().and_then(|(socket, addr)| {
-        println!("{}", addr);
+        debug!("{}", addr);
         tokio_socks5::serve(socket)
     });
 
     let handle = lp.handle();
     let server = streams.for_each(move |(c1, addr)| {
+        debug!("remote address: {}", addr);
         let addr = if let Ok(address) = addr.parse() {
             address
         } else {
+            info!("invalid address: {}", addr);
             return Ok(());
         };
 
@@ -42,8 +46,9 @@ fn main() {
             half1.join(half2).map(|(h1, h2)| (h1.0, h2.0))
         });
 
-        let finish = pipe.map(|data| println!("{}/{}", data.0, data.1))
-            .map_err(|e| println!("{}", e));
+        let finish = pipe.map(|data| info!("{}/{}", data.0, data.1))
+            .map_err(|e| info!("{}", e));
+
         handle.spawn(finish);
         Ok(())
     });
