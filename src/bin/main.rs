@@ -1,6 +1,6 @@
 extern crate env_logger;
 extern crate futures;
-#[use_macro]
+#[macro_use]
 extern crate log;
 extern crate tokio_core;
 extern crate tokio_io;
@@ -33,7 +33,7 @@ fn main() {
         let addr = if let Ok(address) = addr.parse() {
             address
         } else {
-            info!("invalid address: {}", addr);
+            error!("invalid address: {}", addr);
             return Ok(());
         };
 
