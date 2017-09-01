@@ -1,59 +1,50 @@
 extern crate env_logger;
 extern crate futures;
 extern crate tokio_core;
+extern crate tokio_io;
 extern crate tokio_socks5;
 
-use std::env;
-use std::net::SocketAddr;
 use std::str;
-
-use futures::future;
 use futures::{Future, Stream};
-use tokio_core::net::TcpListener;
+use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::reactor::Core;
+use tokio_io::io::copy;
+use tokio_io::AsyncRead;
 
 fn main() {
     drop(env_logger::init());
 
-    // Take the first command line argument as an address to listen on, or fall
-    // back to just some localhost default.
-    let addr = env::args().nth(1).unwrap_or("127.0.0.1:8080".to_string());
-    let addr = addr.parse::<SocketAddr>().unwrap();
-
-    // Initialize the various data structures we're going to use in our server.
-    // Here we create the event loop.
+    let addr = "127.0.0.1:8080".parse().unwrap();
     let mut lp = Core::new().unwrap();
     let handle = lp.handle();
     let listener = TcpListener::bind(&addr, &handle).unwrap();
 
-    // Construct a future representing our server. This future processes all
-    // incoming connections and spawns a new task for each client which will do
-    // the proxy work.
-    //
-    // This essentially means that for all incoming connections, those received
-    // from `listener`, we'll create an instance of `Client` and convert it to a
-    // future representing the completion of handling that client. This future
-    // itself is then *spawned* onto the event loop to ensure that it can
-    // progress concurrently with all other connections.
     println!("Listening for socks5 proxy connections on {}", addr);
-    let clients = listener.incoming().map(move |(socket, addr)| {
-        (
-            Client {
-                dns: client.clone(),
-                handle: handle.clone(),
-            }.serve(socket),
-            addr,
-        )
+    let streams = listener.incoming().and_then(|(socket, addr)| {
+        println!("{}", addr);
+        tokio_socks5::serve(socket)
     });
+
     let handle = lp.handle();
-    let server = clients.for_each(|(client, addr)| {
-        handle.spawn(client.then(move |res| {
-            match res {
-                Ok((a, b)) => println!("proxied {}/{} bytes for {}", a, b, addr),
-                Err(e) => println!("error for {}: {}", addr, e),
-            }
-            future::ok(())
-        }));
+    let server = streams.for_each(move |(c1, addr)| {
+        let addr = if let Ok(address) = addr.parse() {
+            address
+        } else {
+            return Ok(());
+        };
+
+        let pair = TcpStream::connect(&addr, &handle).map(|c2| (c1, c2));
+        let pipe = pair.and_then(|(c1, c2)| {
+            let (reader1, writer1) = c1.split();
+            let (reader2, writer2) = c2.split();
+            let half1 = copy(reader1, writer2);
+            let half2 = copy(reader2, writer1);
+            half1.join(half2).map(|(h1, h2)| (h1.0, h2.0))
+        });
+
+        let finish = pipe.map(|data| println!("{}/{}", data.0, data.1))
+            .map_err(|e| println!("{}", e));
+        handle.spawn(finish);
         Ok(())
     });
 
