@@ -20,6 +20,7 @@ Next, add this to your crate:
 
 ```rust
 extern crate tokio_socks5;
+```
 
 # Licenses
 
