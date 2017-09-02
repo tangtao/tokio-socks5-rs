@@ -1,3 +1,5 @@
+//! A simple socks5 proxy library.
+
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_io;
@@ -23,6 +25,10 @@ mod v5 {
     pub const TYPE_DOMAIN: u8 = 3;
 }
 
+/// Creates a future which will handle socks5 connection.
+///
+/// if success The returned future will the handled `TcpStream` and address. if handle shake fail will
+/// return `io::Error`.
 pub fn serve(conn: TcpStream) -> Box<Future<Item = (TcpStream, String), Error = io::Error>> {
     // socks version, only support version 5.
     let version = read_exact(conn, [0u8; 2]).and_then(|(conn, buf)| if buf[0] == v5::VERSION {
