@@ -1,7 +1,9 @@
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_io;
+extern crate tokio_timer;
 
+use std::time::Duration;
 use std::io;
 use std::str;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
@@ -10,6 +12,7 @@ use futures::future;
 use futures::Future;
 use tokio_io::io::{read_exact, write_all};
 use tokio_core::net::TcpStream;
+use tokio_timer::Timer;
 
 mod v5 {
     pub const VERSION: u8 = 5;
@@ -99,7 +102,9 @@ pub fn serve(conn: TcpStream) -> Box<Future<Item = (TcpStream, String), Error = 
 
                         let pos = buf.len() - 2;
                         let port = ((buf[pos] as u16) << 8) | (buf[pos + 1] as u16);
-                        mybox(future::ok((conn, format!("{}:{}", hostname.to_string(), port))))
+                        mybox(future::ok(
+                            (conn, format!("{}:{}", hostname.to_string(), port)),
+                        ))
                     }),
             ),
             n => {
@@ -117,9 +122,12 @@ pub fn serve(conn: TcpStream) -> Box<Future<Item = (TcpStream, String), Error = 
         write_all(conn, resp).map(move |(conn, _)| (conn, addr))
     }));
 
-    mybox(
-        handshake_finish.and_then(|(conn, addr)| future::ok((conn, addr))),
-    )
+    let timer = Timer::default();
+    let timeout = timer
+        .timeout(handshake_finish, Duration::new(10, 0))
+        .map_err(|_| other("handshake timeout"));
+
+    mybox(timeout.and_then(|(conn, addr)| future::ok((conn, addr))))
 }
 
 fn mybox<F: Future + 'static>(f: F) -> Box<Future<Item = F::Item, Error = F::Error>> {
