@@ -8,7 +8,7 @@ extern crate tokio_timer;
 use std::time::Duration;
 use std::io;
 use std::str;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use futures::future;
 use futures::Future;
@@ -70,7 +70,6 @@ pub fn serve(conn: TcpStream) -> Box<Future<Item = (TcpStream, String, u16), Err
             v5::TYPE_IPV4 => mybox(read_exact(c, [0u8; 6]).and_then(|(c, buf)| {
                 let addr = Ipv4Addr::new(buf[0], buf[1], buf[2], buf[3]);
                 let port = ((buf[4] as u16) << 8) | (buf[5] as u16);
-                // let addr = SocketAddrV4::new(addr, port);
                 mybox(future::ok((c, format!("{}", addr), port)))
             })),
 
@@ -87,7 +86,6 @@ pub fn serve(conn: TcpStream) -> Box<Future<Item = (TcpStream, String, u16), Err
                 let h = ((buf[14] as u16) << 8) | (buf[15] as u16);
                 let addr = Ipv6Addr::new(a, b, c, d, e, f, g, h);
                 let port = ((buf[16] as u16) << 8) | (buf[17] as u16);
-                // let addr = SocketAddrV6::new(addr, port, 0, 0);
                 mybox(future::ok((conn, format!("{}", addr), port)))
             })),
 
