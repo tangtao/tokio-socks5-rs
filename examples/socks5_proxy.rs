@@ -28,8 +28,9 @@ fn main() {
     });
 
     let handle = lp.handle();
-    let server = streams.for_each(move |(c1, addr)| {
-        debug!("remote address: {}", addr);
+    let server = streams.for_each(move |(c1, addr, port)| {
+        debug!("remote address: {}:{}", addr, port);
+        let addr = format!("{}:{}", addr, port);
         let addr = if let Ok(address) = addr.parse() {
             address
         } else {

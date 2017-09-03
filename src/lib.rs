@@ -29,7 +29,7 @@ mod v5 {
 ///
 /// if success The returned future will the handled `TcpStream` and address. if handle shake fail will
 /// return `io::Error`.
-pub fn serve(conn: TcpStream) -> Box<Future<Item = (TcpStream, String), Error = io::Error>> {
+pub fn serve(conn: TcpStream) -> Box<Future<Item = (TcpStream, String, u16), Error = io::Error>> {
     // socks version, only support version 5.
     let version = read_exact(conn, [0u8; 2]).and_then(|(conn, buf)| if buf[0] == v5::VERSION {
         Ok((conn, buf))
@@ -70,8 +70,8 @@ pub fn serve(conn: TcpStream) -> Box<Future<Item = (TcpStream, String), Error = 
             v5::TYPE_IPV4 => mybox(read_exact(c, [0u8; 6]).and_then(|(c, buf)| {
                 let addr = Ipv4Addr::new(buf[0], buf[1], buf[2], buf[3]);
                 let port = ((buf[4] as u16) << 8) | (buf[5] as u16);
-                let addr = SocketAddrV4::new(addr, port);
-                mybox(future::ok((c, format!("{}", addr))))
+                // let addr = SocketAddrV4::new(addr, port);
+                mybox(future::ok((c, format!("{}", addr), port)))
             })),
 
             // For IPv6 addresses there's 16 bytes of an address plus two
@@ -87,8 +87,8 @@ pub fn serve(conn: TcpStream) -> Box<Future<Item = (TcpStream, String), Error = 
                 let h = ((buf[14] as u16) << 8) | (buf[15] as u16);
                 let addr = Ipv6Addr::new(a, b, c, d, e, f, g, h);
                 let port = ((buf[16] as u16) << 8) | (buf[17] as u16);
-                let addr = SocketAddrV6::new(addr, port, 0, 0);
-                mybox(future::ok((conn, format!("{}", addr))))
+                // let addr = SocketAddrV6::new(addr, port, 0, 0);
+                mybox(future::ok((conn, format!("{}", addr), port)))
             })),
 
             // The SOCKSv5 protocol not only supports proxying to specific
@@ -109,7 +109,7 @@ pub fn serve(conn: TcpStream) -> Box<Future<Item = (TcpStream, String), Error = 
                         let pos = buf.len() - 2;
                         let port = ((buf[pos] as u16) << 8) | (buf[pos + 1] as u16);
                         mybox(future::ok(
-                            (conn, format!("{}:{}", hostname.to_string(), port)),
+                            (conn, hostname.to_string(), port),
                         ))
                     }),
             ),
@@ -123,9 +123,9 @@ pub fn serve(conn: TcpStream) -> Box<Future<Item = (TcpStream, String), Error = 
     // Sending connection established message immediately to client.
     // This some round trip time for creating socks connection with the client.
     // But if connection failed, the client will get connection reset error.
-    let handshake_finish = mybox(address.and_then(move |(conn, addr)| {
+    let handshake_finish = mybox(address.and_then(move |(conn, addr, port)| {
         let resp = [0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x08, 0x43];
-        write_all(conn, resp).map(move |(conn, _)| (conn, addr))
+        write_all(conn, resp).map(move |(conn, _)| (conn, addr, port))
     }));
 
     let timer = Timer::default();
@@ -133,7 +133,7 @@ pub fn serve(conn: TcpStream) -> Box<Future<Item = (TcpStream, String), Error = 
         .timeout(handshake_finish, Duration::new(10, 0))
         .map_err(|_| other("handshake timeout"));
 
-    mybox(timeout.and_then(|(conn, addr)| future::ok((conn, addr))))
+    mybox(timeout.map(|(conn, addr, port)| (conn, addr, port)))
 }
 
 fn mybox<F: Future + 'static>(f: F) -> Box<Future<Item = F::Item, Error = F::Error>> {
