@@ -56,8 +56,9 @@ fn main() {
             half1.join(half2).map(|(h1, h2)| (h1.0, h2.0))
         });
 
-        let finish = pipe.map(|data| info!("{}/{}", data.0, data.1))
-            .map_err(|e| info!("{}", e));
+        let finish = pipe.map(|data| {
+            println!("received {} bytes, responsed {} bytes", data.0, data.1)
+        }).map_err(|e| info!("{}", e));
 
         handle.spawn(finish);
         Ok(())
