@@ -1,3 +1,5 @@
+#![feature(lookup_host)]
+
 extern crate env_logger;
 extern crate futures;
 #[macro_use]
@@ -7,6 +9,7 @@ extern crate tokio_io;
 extern crate tokio_socks5;
 
 use std::str;
+use std::net;
 use futures::{Future, Stream};
 use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::reactor::Core;
@@ -30,12 +33,18 @@ fn main() {
     let handle = lp.handle();
     let server = streams.for_each(move |(c1, host, port)| {
         println!("remote address: {}:{}", host, port);
-        let addr = format!("{}:{}", host, port);
-        let addr = if let Ok(address) = addr.parse() {
-            address
-        } else {
-            error!("invalid address: {}", addr);
-            return Ok(());
+        let addr = match net::lookup_host(&host) {
+            Ok(mut hosts) => if let Some(mut h) = hosts.nth(0) {
+                h.set_port(port);
+                h
+            } else {
+                error!("no address");
+                return Ok(());
+            },
+            Err(e) => {
+                error!("invalid host: {}", e);
+                return Ok(());
+            }
         };
 
         let pair = TcpStream::connect(&addr, &handle).map(|c2| (c1, c2));
