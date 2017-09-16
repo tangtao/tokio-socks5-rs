@@ -1,5 +1,3 @@
-#![feature(lookup_host)]
-
 extern crate env_logger;
 extern crate futures;
 #[macro_use]
@@ -7,14 +5,17 @@ extern crate log;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_socks5;
+extern crate trust_dns_resolver;
 
 use std::str;
-use std::net;
+use std::net::SocketAddr;
 use futures::{Future, Stream};
 use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::reactor::Core;
 use tokio_io::io::copy;
 use tokio_io::AsyncRead;
+use trust_dns_resolver::ResolverFuture;
+use trust_dns_resolver::config::*;
 
 fn main() {
     drop(env_logger::init());
@@ -30,24 +31,21 @@ fn main() {
         tokio_socks5::serve(socket)
     });
 
-    let handle = lp.handle();
     let server = streams.for_each(move |(c1, host, port)| {
-        println!("remote address: {}:{}", host, port);
-        let addr = match net::lookup_host(&host) {
-            Ok(mut hosts) => if let Some(mut h) = hosts.nth(0) {
-                h.set_port(port);
-                h
-            } else {
-                error!("no address");
-                return Ok(());
-            },
-            Err(e) => {
-                error!("invalid host: {}", e);
-                return Ok(());
-            }
-        };
+        let resolver =
+            ResolverFuture::new(ResolverConfig::default(), ResolverOpts::default(), &handle);
 
-        let pair = TcpStream::connect(&addr, &handle).map(|c2| (c1, c2));
+        println!("{}", addr);
+        let look_up = resolver.lookup_ip(&host);
+        println!("remote address: {}:{}", host, port);
+
+        let handle1 = handle.clone();
+        let pair = look_up.and_then(move |res| {
+            let addr = res.iter().next().expect("no addresses returned!");
+            println!("{}", addr);
+            TcpStream::connect(&SocketAddr::new(addr, port), &handle1).map(|c2| (c1, c2))
+        });
+
         let pipe = pair.and_then(|(c1, c2)| {
             let (reader1, writer1) = c1.split();
             let (reader2, writer2) = c2.split();
