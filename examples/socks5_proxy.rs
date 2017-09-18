@@ -15,7 +15,6 @@ use tokio_core::reactor::Core;
 use tokio_io::io::copy;
 use tokio_io::AsyncRead;
 use trust_dns_resolver::ResolverFuture;
-use trust_dns_resolver::config::*;
 
 fn main() {
     drop(env_logger::init());
