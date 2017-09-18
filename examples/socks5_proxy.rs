@@ -32,8 +32,7 @@ fn main() {
     });
 
     let server = streams.for_each(move |(c1, host, port)| {
-        let resolver =
-            ResolverFuture::new(ResolverConfig::default(), ResolverOpts::default(), &handle);
+        let resolver = ResolverFuture::from_system_conf(&handle).unwrap();
 
         println!("{}", addr);
         let look_up = resolver.lookup_ip(&host);
