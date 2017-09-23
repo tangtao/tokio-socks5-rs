@@ -7,10 +7,11 @@ extern crate tokio_io;
 extern crate tokio_socks5;
 extern crate trust_dns_resolver;
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
+use std::io;
 
-
-use futures::{Future, Stream};
+use futures::{future, Future, Stream};
 use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::reactor::Core;
 use tokio_io::io::copy;
@@ -39,11 +40,22 @@ fn main() {
         let handle1 = handle.clone();
 
         let look_up = resolver.lookup_ip(&host);
-        let pair = look_up.and_then(move |res| {
-            let addr = res.iter().next().expect("no addresses returned!");
-            println!("{}", addr);
-            TcpStream::connect(&SocketAddr::new(addr, port), &handle1).map(|c2| (c1, c2))
-        });
+        let pair = look_up
+            .and_then(move |res| if let Some(addr) = res.iter().next() {
+                future::ok(addr)
+            } else {
+                if let Ok(addr) = IpAddr::from_str(&host) {
+                    future::ok(addr)
+                } else {
+                    future::err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "invalid host".to_string(),
+                    ))
+                }
+            })
+            .and_then(move |addr| {
+                TcpStream::connect(&SocketAddr::new(addr, port), &handle1).map(|c2| (c1, c2))
+            });
 
         let pipe = pair.and_then(|(c1, c2)| {
             let (reader1, writer1) = c1.split();
