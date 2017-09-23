@@ -7,8 +7,9 @@ extern crate tokio_io;
 extern crate tokio_socks5;
 extern crate trust_dns_resolver;
 
-use std::str;
 use std::net::SocketAddr;
+
+
 use futures::{Future, Stream};
 use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::reactor::Core;
@@ -23,6 +24,7 @@ fn main() {
     let mut lp = Core::new().unwrap();
     let handle = lp.handle();
     let listener = TcpListener::bind(&addr, &handle).unwrap();
+    let resolver = ResolverFuture::from_system_conf(&handle).unwrap();
 
     println!("Listening for socks5 proxy connections on {}", addr);
     let streams = listener.incoming().and_then(|(socket, addr)| {
@@ -31,13 +33,12 @@ fn main() {
     });
 
     let server = streams.for_each(move |(c1, host, port)| {
-        let resolver = ResolverFuture::from_system_conf(&handle).unwrap();
-
         println!("{}", addr);
-        let look_up = resolver.lookup_ip(&host);
         println!("remote address: {}:{}", host, port);
 
         let handle1 = handle.clone();
+
+        let look_up = resolver.lookup_ip(&host);
         let pair = look_up.and_then(move |res| {
             let addr = res.iter().next().expect("no addresses returned!");
             println!("{}", addr);
