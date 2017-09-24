@@ -39,20 +39,8 @@ fn main() {
 
         let handle1 = handle.clone();
 
-        let look_up = resolver.lookup_ip(&host);
+        let look_up = resolve(&host, &resolver);
         let pair = look_up
-            .and_then(move |res| if let Some(addr) = res.iter().next() {
-                future::ok(addr)
-            } else {
-                if let Ok(addr) = IpAddr::from_str(&host) {
-                    future::ok(addr)
-                } else {
-                    future::err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "invalid host".to_string(),
-                    ))
-                }
-            })
             .and_then(move |addr| {
                 TcpStream::connect(&SocketAddr::new(addr, port), &handle1).map(|c2| (c1, c2))
             });
@@ -74,4 +62,23 @@ fn main() {
     });
 
     lp.run(server).unwrap();
+}
+
+fn resolve(host: &str, resolver: &ResolverFuture) -> Box<Future<Item = IpAddr, Error = io::Error>> {
+    if let Ok(addr) = IpAddr::from_str(&host) {
+        return Box::new(future::ok(addr));
+    }
+
+    let look_up = resolver.lookup_ip(&host);
+    let res = look_up
+        .and_then(move |res| if let Some(addr) = res.iter().next() {
+            future::ok(addr)
+        } else {
+            future::err(io::Error::new(
+                io::ErrorKind::Other,
+                "resolve fail".to_string(),
+            ))
+        });
+
+    Box::new(res)
 }
