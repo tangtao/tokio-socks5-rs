@@ -69,16 +69,20 @@ fn resolve(host: &str, resolver: &ResolverFuture) -> Box<Future<Item = IpAddr, E
         return Box::new(future::ok(addr));
     }
 
-    let look_up = resolver.lookup_ip(&host);
-    let res = look_up
-        .and_then(move |res| if let Some(addr) = res.iter().next() {
-            future::ok(addr)
-        } else {
-            future::err(io::Error::new(
-                io::ErrorKind::Other,
-                "resolve fail".to_string(),
-            ))
-        });
+    let res = resolver.lookup_ip(&host).then(move |res| {
+        match res {
+            Ok(r) => if let Some(addr) = r.iter().next() {
+                future::ok(addr)
+            } else {
+                future::err(other("no ip return"))
+            },
+            Err(_) => future::err(other("resolve fail")),
+        }
+    });
 
     Box::new(res)
+}
+
+pub fn other(desc: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, desc)
 }
